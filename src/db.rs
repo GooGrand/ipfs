@@ -1,7 +1,5 @@
 use anyhow::Context;
 use anyhow::Result;
-use json;
-use json::JsonValue;
 use mysql::prelude::Queryable;
 use mysql::*;
 use std::sync::atomic::AtomicU64;
@@ -29,45 +27,39 @@ impl Database {
         })
     }
 
-    pub fn query_as_json(&self) -> Result<JsonValue> {
+    /// Query next row from the given table
+    ///
+    /// Returns `Ok(Vec<mysql::Value>)`, the values of row with sql typed wrapper
+    pub fn query_next_row(&self) -> Result<Vec<Value>> {
         let mut conn = self.pool.get_conn()?;
         // TODO handle last row id to not drop the service
-        let row: Vec<Value> = conn
-            .query(format!(
-                "SELECT * FROM {} WHERE id = {};",
-                self.table_name,
-                self.next_row_id
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            ))
-            .map_err(|e| anyhow::anyhow!("{}", e.to_string()))?;
-        let mut data = json::JsonValue::new_object();
-        data["table_name"] = JsonValue::String(self.table_name.clone());
-        for (id, item) in row.into_iter().enumerate() {
-            data[self.schema[id].clone()] = into_json_value(item);
-        }
-        Ok(data)
+        conn.query(format!(
+            "SELECT * FROM {} WHERE id = {};",
+            self.table_name,
+            self.next_row_id
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ))
+        .map_err(|e| anyhow::anyhow!("{}", e.to_string()))
     }
 
+    /// Query column names for given table
+    ///
+    ///  # Arguments
+    ///
+    /// * `conn` - A connection to db
+    /// * `table_name` - Table name
+    ///
+    /// Returns `Ok(Vec<String>)`, Vector of column names
     pub fn get_schema(conn: &mut PooledConn, table_name: &str) -> Result<Vec<String>> {
         conn.query(format!("SHOW `columns` FROM `{}`;", table_name,))
             .map_err(|e| anyhow::anyhow!("{}", e.to_string()))
     }
-}
 
-pub fn into_json_value(item: Value) -> JsonValue {
-    match item {
-        Value::Bytes(bytes) => JsonValue::String(String::from_utf8_lossy(&bytes).into_owned()),
-        Value::Double(value) => JsonValue::Number(value.into()),
-        Value::Float(value) => JsonValue::Number(value.into()),
-        Value::Int(value) => JsonValue::Number(value.into()),
-        Value::UInt(value) => JsonValue::Number(value.into()),
-        Value::NULL => JsonValue::Null,
-        Value::Date(y, m, d, h, min, s, ms) => {
-            JsonValue::String(format!("{}.{}.{}-{}:{}:{}::{}", y, m, d, h, min, s, ms))
-        }
-        Value::Time(n, d, h, m, s, ms) => {
-            let sign = if n {"-"} else {""};
-            JsonValue::String(format!("{} {}{}:{}:{}::{}", d, sign, h, m, s, ms))
-        }
+    pub fn columns(&self) -> Vec<String> {
+        self.schema.clone()
+    }
+
+    pub fn table_name(&self) -> String {
+        self.table_name.clone()
     }
 }
